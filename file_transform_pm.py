@@ -238,8 +238,7 @@ def process_file(file_path):
     
     except Exception as e:
         print(f"Error processing file {os.path.basename(file_path)}: {str(e)}")
-        if 'st' in globals():
-            st.error(f"Error processing file {os.path.basename(file_path)}: {str(e)}")
+        st.error(f"Error processing file {os.path.basename(file_path)}: {str(e)}")
         return None
 
 def combine_dataframes(dataframes):
@@ -289,8 +288,7 @@ def create_excel_output(master_df, output_path):
             
             if not available_numeric_cols:
                 print("Warning: No numeric columns found for summary")
-                if 'st' in globals():
-                    st.warning("No numeric columns found for summary")
+                st.warning("No numeric columns found for summary")
                 return True
             
             # Create comprehensive summary pivot table
@@ -341,8 +339,7 @@ def create_excel_output(master_df, output_path):
                     summary_pivot.to_excel(writer, sheet_name='Summary')
             except Exception as e:
                 print(f"Error creating summary: {str(e)}")
-                if 'st' in globals():
-                    st.error(f"Error creating summary: {str(e)}")
+                st.error(f"Error creating summary: {str(e)}")
             
             # Create additional pivot tables for specific views
             
@@ -364,8 +361,7 @@ def create_excel_output(master_df, output_path):
                     pivot_time.to_excel(writer, sheet_name='Summary by Time')
             except Exception as e:
                 print(f"Error creating time summary: {str(e)}")
-                if 'st' in globals():
-                    st.error(f"Error creating time summary: {str(e)}")
+                st.error(f"Error creating time summary: {str(e)}")
             
             # 2. Summary by Channel
             try:
@@ -385,8 +381,7 @@ def create_excel_output(master_df, output_path):
                     pivot_channel.to_excel(writer, sheet_name='Summary by Channel')
             except Exception as e:
                 print(f"Error creating channel summary: {str(e)}")
-                if 'st' in globals():
-                    st.error(f"Error creating channel summary: {str(e)}")
+                st.error(f"Error creating channel summary: {str(e)}")
             
             # 3. Summary by Region
             try:
@@ -406,18 +401,17 @@ def create_excel_output(master_df, output_path):
                     pivot_region.to_excel(writer, sheet_name='Summary by Region')
             except Exception as e:
                 print(f"Error creating region summary: {str(e)}")
-                if 'st' in globals():
-                    st.error(f"Error creating region summary: {str(e)}")
+                st.error(f"Error creating region summary: {str(e)}")
         
         return True
     
     except Exception as e:
         print(f"Error creating Excel output: {str(e)}")
-        if 'st' in globals():
-            st.error(f"Error creating Excel output: {str(e)}")
+        st.error(f"Error creating Excel output: {str(e)}")
         return False
 
-def streamlit_ui():
+# Streamlit UI
+def main():
     st.title("Marketing Data Master File Generator")
     st.write("Upload CSV files to generate a master file with added date and region information.")
     
@@ -486,87 +480,5 @@ def streamlit_ui():
                 else:
                     st.error("No valid data found in the uploaded files.")
 
-# Alternative Tkinter UI
-def tkinter_ui():
-    root = tk.Tk()
-    root.title("Marketing Data Master File Generator")
-    root.geometry("500x400")
-    
-    # Variable to store selected file paths
-    selected_files = []
-    
-    def select_files():
-        nonlocal selected_files
-        file_paths = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
-        if file_paths:
-            selected_files = file_paths
-            files_label.config(text=f"{len(file_paths)} files selected")
-            process_button.config(state=tk.NORMAL)
-            
-    def process_files_func():
-        if not selected_files:
-            messagebox.showerror("Error", "No files selected")
-            return
-            
-        dataframes = []
-        
-        for file_path in selected_files:
-            df = process_file(file_path)
-            if df is not None:
-                dataframes.append(df)
-        
-        if dataframes:
-            # Combine all dataframes
-            master_df = combine_dataframes(dataframes)
-            
-            if master_df is not None:
-                # Generate output filename
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_path = filedialog.asksaveasfilename(
-                    defaultextension=".xlsx",
-                    filetypes=[("Excel files", "*.xlsx")],
-                    initialfile=f"Marketing_Master_{timestamp}.xlsx"
-                )
-                
-                if output_path:
-                    # Create Excel output
-                    success = create_excel_output(master_df, output_path)
-                    if success:
-                        messagebox.showinfo("Success", f"Master file saved to {output_path}")
-                    else:
-                        messagebox.showerror("Error", "Failed to create Excel file")
-            else:
-                messagebox.showerror("Error", "Failed to combine dataframes.")
-        else:
-            messagebox.showerror("Error", "No valid data found in the selected files.")
-    
-    # UI Elements
-    header_label = tk.Label(root, text="Marketing Data Master File Generator", font=("Arial", 14))
-    header_label.pack(pady=20)
-    
-    # Instructions label
-    instructions = """File Naming Convention:
-- Include month in the filename (Jan, Feb, Mar, etc.)
-- For weekly data, include 'Week1', 'Week2', etc.
-- Example: 'Pepperstone_PPC_May_Week1_2025.csv'
-- For monthly: 'Pepperstone_Social_Feb_2025.csv'"""
-    
-    instructions_label = tk.Label(root, text=instructions, justify="left")
-    instructions_label.pack(pady=10)
-    
-    select_button = tk.Button(root, text="Select CSV Files", command=select_files)
-    select_button.pack(pady=10)
-    
-    files_label = tk.Label(root, text="No files selected")
-    files_label.pack(pady=10)
-    
-    process_button = tk.Button(root, text="Process Files", state=tk.DISABLED, command=process_files_func)
-    process_button.pack(pady=10)
-    
-    root.mainloop()
-
-# Choose which UI to run
 if __name__ == "__main__":
-    # Choose one:
-    streamlit_ui()  # Web-based UI (recommended)
-    # tkinter_ui()  # Desktop UI
+    main()
