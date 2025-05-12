@@ -4,6 +4,7 @@ import os
 import re
 from datetime import datetime
 import streamlit as st
+import tempfile
 
 def to_camel_case(snake_str):
     """Convert snake_case to CamelCase"""
@@ -107,17 +108,17 @@ def detect_region_and_country(text):
     
     return "Unknown", "Unknown"
 
-def process_file(file_path):
+def process_file(file_path, file_name):
     """Process a single CSV file"""
     try:
         # Extract date information from file path
-        month, week = extract_date_info(file_path)
+        month, week = extract_date_info(file_name)
         
         # Read the CSV file
         df = pd.read_csv(file_path)
         
-        # Print columns for debugging
-        print(f"Original columns in {os.path.basename(file_path)}: {df.columns.tolist()}")
+        # Log columns for debugging
+        st.write(f"Original columns in {file_name}: {df.columns.tolist()}")
         
         # First standardize column names by converting to lowercase and stripping whitespace
         df.columns = [col.lower().strip() for col in df.columns]
@@ -179,8 +180,8 @@ def process_file(file_path):
         # Rename columns according to the mapping
         df = df.rename(columns={old: new for old, new in column_mapping.items() if old in df.columns})
         
-        # Print columns after standardization for debugging
-        print(f"Standardized columns in {os.path.basename(file_path)}: {df.columns.tolist()}")
+        # Log columns after standardization
+        st.write(f"Standardized columns in {file_name}: {df.columns.tolist()}")
         
         # Add clicks column if it doesn't exist
         if 'Clicks' not in df.columns:
@@ -230,15 +231,10 @@ def process_file(file_path):
                         df.at[idx, 'Region'] = adgroup_region
                         df.at[idx, 'Country'] = adgroup_country
         
-        # Print sample of region/country assignment
-        print(f"Sample region/country assignments in {os.path.basename(file_path)}:")
-        print(df[['Region', 'Country']].head())
-        
         return df
     
     except Exception as e:
-        print(f"Error processing file {os.path.basename(file_path)}: {str(e)}")
-        st.error(f"Error processing file {os.path.basename(file_path)}: {str(e)}")
+        st.error(f"Error processing file {file_name}: {str(e)}")
         return None
 
 def combine_dataframes(dataframes):
@@ -268,17 +264,17 @@ def combine_dataframes(dataframes):
     other_cols = [col for col in master_df.columns if col not in date_cols]
     master_df = master_df[date_cols + other_cols]
     
-    # Print sample of the master dataframe
-    print("Sample of master dataframe:")
-    print(master_df[['Month', 'Week', 'Region', 'Country']].head())
-    
     return master_df
 
-def create_excel_output(master_df, output_path):
+def create_excel_output(master_df):
     """Create an Excel output with multiple sheets and comprehensive summary"""
     try:
+        # Create a temporary directory for the Excel file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
+            temp_path = temp_file.name
+        
         # Create a new Excel file with pandas
-        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        with pd.ExcelWriter(temp_path, engine='openpyxl') as writer:
             # Write the master data first
             master_df.to_excel(writer, sheet_name='Master Data', index=False)
             
@@ -287,9 +283,8 @@ def create_excel_output(master_df, output_path):
             available_numeric_cols = [col for col in numeric_cols if col in master_df.columns]
             
             if not available_numeric_cols:
-                print("Warning: No numeric columns found for summary")
                 st.warning("No numeric columns found for summary")
-                return True
+                return temp_path
             
             # Create comprehensive summary pivot table
             try:
@@ -318,27 +313,26 @@ def create_excel_output(master_df, output_path):
                         if 'Clicks' in available_numeric_cols and 'Impressions' in available_numeric_cols:
                             summary_pivot['CTR'] = summary_pivot['Clicks'] / summary_pivot['Impressions'] * 100
                         
-                        if 'Spend' in available_numeric_cols and 'Clicks' in available_numeric_cols:
+                        if 'Spend' in available_numeric_cols and 'Clicks' in available_numeric_cols and (summary_pivot['Clicks'] > 0).any():
                             summary_pivot['CPC'] = summary_pivot['Spend'] / summary_pivot['Clicks']
                         
-                        if 'Spend' in available_numeric_cols and 'QL' in available_numeric_cols:
+                        if 'Spend' in available_numeric_cols and 'QL' in available_numeric_cols and (summary_pivot['QL'] > 0).any():
                             summary_pivot['CpQL'] = summary_pivot['Spend'] / summary_pivot['QL']
                         
-                        if 'QL' in available_numeric_cols and 'Clicks' in available_numeric_cols:
+                        if 'QL' in available_numeric_cols and 'Clicks' in available_numeric_cols and (summary_pivot['Clicks'] > 0).any():
                             summary_pivot['QL Conv %'] = summary_pivot['QL'] / summary_pivot['Clicks'] * 100
                         
-                        if 'FT' in available_numeric_cols and 'QL' in available_numeric_cols:
+                        if 'FT' in available_numeric_cols and 'QL' in available_numeric_cols and (summary_pivot['QL'] > 0).any():
                             summary_pivot['FT Conv %'] = summary_pivot['FT'] / summary_pivot['QL'] * 100
                         
-                        if 'MNR' in available_numeric_cols and 'Spend' in available_numeric_cols:
+                        if 'MNR' in available_numeric_cols and 'Spend' in available_numeric_cols and (summary_pivot['Spend'] > 0).any():
                             summary_pivot['ROI'] = summary_pivot['MNR'] / summary_pivot['Spend']
                     except Exception as e:
-                        print(f"Warning: Could not calculate some metrics: {str(e)}")
+                        st.warning(f"Could not calculate some metrics: {str(e)}")
                     
                     # Write the summary to Excel
                     summary_pivot.to_excel(writer, sheet_name='Summary')
             except Exception as e:
-                print(f"Error creating summary: {str(e)}")
                 st.error(f"Error creating summary: {str(e)}")
             
             # Create additional pivot tables for specific views
@@ -360,7 +354,6 @@ def create_excel_output(master_df, output_path):
                     )
                     pivot_time.to_excel(writer, sheet_name='Summary by Time')
             except Exception as e:
-                print(f"Error creating time summary: {str(e)}")
                 st.error(f"Error creating time summary: {str(e)}")
             
             # 2. Summary by Channel
@@ -380,7 +373,6 @@ def create_excel_output(master_df, output_path):
                     )
                     pivot_channel.to_excel(writer, sheet_name='Summary by Channel')
             except Exception as e:
-                print(f"Error creating channel summary: {str(e)}")
                 st.error(f"Error creating channel summary: {str(e)}")
             
             # 3. Summary by Region
@@ -400,85 +392,118 @@ def create_excel_output(master_df, output_path):
                     )
                     pivot_region.to_excel(writer, sheet_name='Summary by Region')
             except Exception as e:
-                print(f"Error creating region summary: {str(e)}")
                 st.error(f"Error creating region summary: {str(e)}")
         
-        return True
+        return temp_path
     
     except Exception as e:
-        print(f"Error creating Excel output: {str(e)}")
         st.error(f"Error creating Excel output: {str(e)}")
-        return False
+        return None
 
 # Streamlit UI
 def main():
+    st.set_page_config(page_title="Marketing Data Master File Generator", layout="wide")
+    
     st.title("Marketing Data Master File Generator")
     st.write("Upload CSV files to generate a master file with added date and region information.")
     
-    # Add instructions about file naming
-    st.info("""
-    **File Naming Convention:**
-    - Include month in the filename (Jan, Feb, Mar, etc.)
-    - For weekly data, include 'Week1', 'Week2', etc. in the filename
-    - Example: 'Pepperstone_PPC_May_Week1_2025.csv'
-    - For monthly data: 'Pepperstone_Social_Feb_2025.csv'
-    """)
+    # Add expander for instructions about file naming
+    with st.expander("File Naming Convention"):
+        st.markdown("""
+        - Include month in the filename (Jan, Feb, Mar, etc.)
+        - For weekly data, include 'Week1', 'Week2', etc. in the filename
+        - Example: 'Pepperstone_PPC_May_Week1_2025.csv'
+        - For monthly data: 'Pepperstone_Social_Feb_2025.csv'
+        """)
     
+    # File uploader
     uploaded_files = st.file_uploader("Choose CSV files", type="csv", accept_multiple_files=True)
     
+    # Processing button
     if uploaded_files:
+        st.write(f"Selected {len(uploaded_files)} files")
+        
         if st.button("Process Files"):
-            with st.spinner("Processing files..."):
-                dataframes = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            status_text.text("Starting file processing...")
+            dataframes = []
+            
+            # Process each uploaded file
+            for i, uploaded_file in enumerate(uploaded_files):
+                status_text.text(f"Processing file {i+1}/{len(uploaded_files)}: {uploaded_file.name}")
+                progress_bar.progress((i) / len(uploaded_files))
                 
-                # Process each uploaded file
-                for uploaded_file in uploaded_files:
-                    # Save the uploaded file temporarily to extract path info
-                    temp_path = f"temp_{uploaded_file.name}"
-                    with open(temp_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-                    
-                    # Process the file
-                    df = process_file(temp_path)
-                    if df is not None:
-                        dataframes.append(df)
-                    
-                    # Clean up
-                    os.remove(temp_path)
+                # Create a temporary file to store the uploaded content
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as temp_file:
+                    temp_file.write(uploaded_file.getvalue())
+                    temp_path = temp_file.name
                 
-                if dataframes:
-                    # Combine all dataframes
-                    master_df = combine_dataframes(dataframes)
+                # Process the file
+                df = process_file(temp_path, uploaded_file.name)
+                if df is not None:
+                    dataframes.append(df)
+                
+                # Clean up
+                os.unlink(temp_path)
+                
+                # Update progress
+                progress_bar.progress((i + 1) / len(uploaded_files))
+            
+            # Combine dataframes if we have any
+            if dataframes:
+                status_text.text("Combining data...")
+                master_df = combine_dataframes(dataframes)
+                
+                if master_df is not None:
+                    # Show data preview
+                    st.subheader("Data Preview")
+                    st.dataframe(master_df.head())
                     
-                    if master_df is not None:
-                        # Generate output filename
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        output_filename = f"Marketing_Master_{timestamp}.xlsx"
-                        
-                        # Create Excel output
-                        success = create_excel_output(master_df, output_filename)
-                        
-                        if success:
-                            # Provide download link
-                            try:
-                                with open(output_filename, "rb") as file:
-                                    st.download_button(
-                                        label="Download Master File",
-                                        data=file,
-                                        file_name=output_filename,
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                    )
-                                # Clean up
-                                os.remove(output_filename)
-                                st.success("Master file generated successfully!")
-                            except Exception as e:
-                                st.error(f"Error preparing download: {str(e)}")
-                        else:
-                            st.error("Failed to create Excel file.")
+                    # Create Excel file
+                    status_text.text("Creating Excel output...")
+                    
+                    # Generate output filename
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    output_filename = f"Marketing_Master_{timestamp}.xlsx"
+                    
+                    # Create the Excel file
+                    excel_path = create_excel_output(master_df)
+                    
+                    if excel_path:
+                        # Provide download link
+                        try:
+                            with open(excel_path, "rb") as file:
+                                excel_data = file.read()
+                            
+                            status_text.text("Processing complete! You can download the file below.")
+                            progress_bar.progress(1.0)
+                            
+                            st.download_button(
+                                label="📥 Download Excel Report",
+                                data=excel_data,
+                                file_name=output_filename,
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                            
+                            # Clean up
+                            os.unlink(excel_path)
+                            
+                        except Exception as e:
+                            status_text.text("Error preparing download.")
+                            st.error(f"Error preparing download: {str(e)}")
                     else:
-                        st.error("Failed to combine dataframes.")
+                        status_text.text("Failed to create Excel file.")
+                        st.error("Failed to create Excel file.")
                 else:
-                    st.error("No valid data found in the uploaded files.")
+                    status_text.text("Failed to combine data.")
+                    st.error("Failed to combine dataframes.")
+            else:
+                status_text.text("No valid data found.")
+                st.error("No valid data found in the uploaded files.")
+    else:
+        st.info("Please upload CSV files to begin processing.")
 
 if __name__ == "__main__":
     main()
