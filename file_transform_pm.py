@@ -1,7 +1,5 @@
 import pandas as pd
 import numpy as np
-import tkinter as tk
-from tkinter import filedialog, messagebox
 import os
 import re
 from datetime import datetime
