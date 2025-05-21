@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 import streamlit as st
 import tempfile
+from typing import Tuple, List
 
 def to_camel_case(snake_str):
     """Convert snake_case to CamelCase"""
@@ -40,8 +41,11 @@ def extract_date_info(file_path):
     
     return month, week
 
-def detect_region_and_country(text):
-    """Identify region and country based on text content"""
+def detect_region_and_country_improved(text: str) -> Tuple[str, str]:
+    """
+    Improved function to identify region and country based on text content.
+    Handles multiple countries and better pattern matching.
+    """
     if not isinstance(text, str):
         return "Unknown", "Unknown"
     
@@ -73,7 +77,9 @@ def detect_region_and_country(text):
             'GERMANY': 'Germany', 'DE': 'Germany',
             'FRANCE': 'France', 'FR': 'France',
             'ITALY': 'Italy', 'IT': 'Italy',
-            'SPAIN': 'Spain', 'ES': 'Spain'
+            'SPAIN': 'Spain', 'ES': 'Spain',
+            'NETHERLANDS': 'Netherlands', 'NL': 'Netherlands',
+            'POLAND': 'Poland', 'PL': 'Poland'
         },
         'Australia': {
             'AUSTRALIA': 'Australia', 'AU': 'Australia', 'AUS': 'Australia',
@@ -85,31 +91,125 @@ def detect_region_and_country(text):
         }
     }
     
-    # First check if a region is explicitly mentioned
+    def find_countries_in_text(text: str, region_countries: dict) -> List[str]:
+        """Find all countries from a specific region mentioned in the text."""
+        found_countries = []
+        
+        for country_code, country_name in region_countries.items():
+            # Improved pattern matching for country codes
+            patterns = [
+                f'\\b{country_code}\\b',  # Word boundary match
+                f'_{country_code}_',      # Underscore separated
+                f'_{country_code}\\b',    # Underscore prefix with word boundary
+                f'\\b{country_code}_',    # Word boundary with underscore suffix
+                f'-{country_code}-',      # Dash separated
+                f'-{country_code}\\b',    # Dash prefix with word boundary
+                f'\\b{country_code}-',    # Word boundary with dash suffix
+            ]
+            
+            # Also check for full country names
+            if len(country_code) > 2:  # Only for full names, not codes
+                patterns.append(f'\\b{country_code}\\b')
+            
+            for pattern in patterns:
+                if re.search(pattern, text):
+                    found_countries.append(country_name)
+                    break  # Don't double-count the same country
+        
+        return list(set(found_countries))  # Remove duplicates
+    
+    # Check for explicit region mentions first
     for region_name in regions.keys():
         if region_name in text:
-            # Region is explicitly mentioned - now check if a specific country is mentioned
-            for country_code, country_name in regions[region_name].items():
-                if country_code in text.split() or f"_{country_code}_" in text or f"_{country_code}" in text or f"{country_code}_" in text:
-                    return region_name, country_name
+            countries_in_region = find_countries_in_text(text, regions[region_name])
             
-            # Region mentioned but no specific country found
-            return region_name, 'Multiple'
+            if len(countries_in_region) == 1:
+                return region_name, countries_in_region[0]
+            elif len(countries_in_region) > 1:
+                return region_name, 'Multiple'
+            else:
+                # Region mentioned but no specific countries found
+                return region_name, 'Multiple'
     
-    # No region explicitly mentioned, so check for country mentions
-    for region_name, countries in regions.items():
-        for country_code, country_name in countries.items():
-            if country_code in text.split() or f"_{country_code}_" in text or f"_{country_code}" in text or f"{country_code}_" in text:
-                return region_name, country_name
-    
-    # Check for region acronyms
-    if 'EU' in text.split() or f"_EU_" in text or text.startswith("EU_") or text.endswith("_EU"):
+    # Check for EU specific case
+    if re.search(r'\bEU\b|_EU_|_EU\b|\bEU_|-EU-|-EU\b|\bEU-', text):
         return 'Europe', 'Multiple'
     
-    return "Unknown", "Unknown"
+    # No explicit region mentioned, check for countries
+    found_countries_by_region = {}
+    
+    for region_name, region_countries in regions.items():
+        countries_found = find_countries_in_text(text, region_countries)
+        if countries_found:
+            found_countries_by_region[region_name] = countries_found
+    
+    # Analyze findings with APAC priority logic
+    if not found_countries_by_region:
+        return "Unknown", "Unknown"
+    
+    # BUSINESS RULE: If APAC countries are found with any other countries, 
+    # prioritize APAC and ignore others
+    if 'APAC' in found_countries_by_region:
+        apac_countries = found_countries_by_region['APAC']
+        
+        if len(apac_countries) == 1:
+            # Single APAC country (ignore any other regions found)
+            return 'APAC', apac_countries[0]
+        else:
+            # Multiple APAC countries (ignore any other regions found)
+            return 'APAC', 'Multiple'
+    
+    # No APAC countries found, proceed with normal logic
+    if len(found_countries_by_region) == 1:
+        # All countries from same non-APAC region
+        region = list(found_countries_by_region.keys())[0]
+        countries = found_countries_by_region[region]
+        
+        if len(countries) == 1:
+            return region, countries[0]
+        else:
+            # Multiple countries from same region
+            return region, 'Multiple'
+    else:
+        # Countries from multiple non-APAC regions
+        return 'Global', 'Multiple'
+
+def process_region_country_vectorized(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Vectorized approach to add region and country information.
+    Much faster than iterrows() approach.
+    """
+    df = df.copy()
+    
+    # Initialize columns
+    df['Region'] = 'Unknown'
+    df['Country'] = 'Unknown'
+    
+    # Create a combined text column for analysis
+    text_columns = []
+    if 'Campaign' in df.columns:
+        text_columns.append('Campaign')
+    if 'AdGroup' in df.columns:
+        text_columns.append('AdGroup')
+    
+    if text_columns:
+        # Combine relevant text columns
+        df['_combined_text'] = df[text_columns].fillna('').apply(
+            lambda row: ' '.join(row.astype(str)), axis=1
+        )
+        
+        # Apply the detection function
+        region_country = df['_combined_text'].apply(detect_region_and_country_improved)
+        df['Region'] = [rc[0] for rc in region_country]
+        df['Country'] = [rc[1] for rc in region_country]
+        
+        # Clean up temporary column
+        df.drop('_combined_text', axis=1, inplace=True)
+    
+    return df
 
 def process_file(file_path, file_name):
-    """Process a single CSV file"""
+    """Enhanced version of process_file with better error handling and performance"""
     try:
         # Extract date information from file path
         month, week = extract_date_info(file_name)
@@ -117,88 +217,42 @@ def process_file(file_path, file_name):
         # Read the CSV file
         df = pd.read_csv(file_path)
         
-        # Log columns for debugging
-        st.write(f"Original columns in {file_name}: {df.columns.tolist()}")
+        # Log original structure
+        st.write(f"Processing {file_name}: {len(df)} rows, {len(df.columns)} columns")
         
-        # First standardize column names by converting to lowercase and stripping whitespace
+        # Standardize column names
         df.columns = [col.lower().strip() for col in df.columns]
-        
-        # Then convert to CamelCase and apply specific mappings
         df.columns = [to_camel_case(col) if '_' in col else col.capitalize() for col in df.columns]
         
-        # Map common column variations to standard names
+        # Complete column mapping
         column_mapping = {
-            'PsChannel': 'Channel',
-            'Pschannel': 'Channel',
-            'Channel': 'Channel',
-            'PsSubChannel': 'SubChannel',
-            'Pssubchannel': 'SubChannel',
-            'Subchannel': 'SubChannel',
-            'Subchannels': 'SubChannel',
-            'Sub_channel': 'SubChannel',
-            'Campaign': 'Campaign',
-            'Campaigns': 'Campaign',
-            'AdGroup': 'AdGroup',
-            'Adgroup': 'AdGroup',
-            'Ad_group': 'AdGroup',
-            'Adgroups': 'AdGroup',
-            'Impression': 'Impressions',
-            'Impressions': 'Impressions',
-            'Click': 'Clicks',
-            'Clicks': 'Clicks',
-            'Spend': 'Spend',
-            'Cost': 'Spend',
-            'Ql': 'QL',
-            'Qual': 'QL',
-            'Qualifieds': 'QL',
-            'Leads': 'QL',
-            'Cpql': 'CpQL',
-            'Costperql': 'CpQL',
-            'Cost_per_ql': 'CpQL',
-            'Costperlead': 'CpQL',
-            'Ft': 'FT',
-            'Firsttime': 'FT',
-            'First_time': 'FT',
-            'Firsttrades': 'FT',
-            'Cpft': 'CpFT',
-            'Costperft': 'CpFT',
-            'Cost_per_ft': 'CpFT',
-            'Mnr': 'MNR',
-            'Marginnetrevenue': 'MNR',
-            'Margin_net_revenue': 'MNR',
-            'Mnr365ql': 'MNR365QL',
-            'Mnr365': 'MNR365QL',
-            'Mnr_365_ql': 'MNR365QL',
-            'RoiMnr': 'ROIMNR',
-            'Roi_mnr': 'ROIMNR',
-            'RoiMnrql365': 'ROIMNRQL365',
-            'Roi_mnrql365': 'ROIMNRQL365',
-            'React': 'React',
-            'Reaction': 'React'
+            'PsChannel': 'Channel', 'Pschannel': 'Channel', 'Channel': 'Channel',
+            'PsSubChannel': 'SubChannel', 'Pssubchannel': 'SubChannel',
+            'Subchannel': 'SubChannel', 'Subchannels': 'SubChannel', 'Sub_channel': 'SubChannel',
+            'Campaign': 'Campaign', 'Campaigns': 'Campaign',
+            'AdGroup': 'AdGroup', 'Adgroup': 'AdGroup', 'Ad_group': 'AdGroup', 'Adgroups': 'AdGroup',
+            'Impression': 'Impressions', 'Impressions': 'Impressions',
+            'Click': 'Clicks', 'Clicks': 'Clicks',
+            'Spend': 'Spend', 'Cost': 'Spend',
+            'Ql': 'QL', 'Qual': 'QL', 'Qualifieds': 'QL', 'Leads': 'QL',
+            'Cpql': 'CpQL', 'Costperql': 'CpQL', 'Cost_per_ql': 'CpQL', 'Costperlead': 'CpQL',
+            'Ft': 'FT', 'Firsttime': 'FT', 'First_time': 'FT', 'Firsttrades': 'FT',
+            'Cpft': 'CpFT', 'Costperft': 'CpFT', 'Cost_per_ft': 'CpFT',
+            'Mnr': 'MNR', 'Marginnetrevenue': 'MNR', 'Margin_net_revenue': 'MNR',
+            'Mnr365ql': 'MNR365QL', 'Mnr365': 'MNR365QL', 'Mnr_365_ql': 'MNR365QL',
+            'RoiMnr': 'ROIMNR', 'Roi_mnr': 'ROIMNR',
+            'RoiMnrql365': 'ROIMNRQL365', 'Roi_mnrql365': 'ROIMNRQL365',
+            'React': 'React', 'Reaction': 'React'
         }
         
-        # Rename columns according to the mapping
         df = df.rename(columns={old: new for old, new in column_mapping.items() if old in df.columns})
         
-        # Log columns after standardization
-        st.write(f"Standardized columns in {file_name}: {df.columns.tolist()}")
-        
-        # Add clicks column if it doesn't exist
-        if 'Clicks' not in df.columns:
-            df['Clicks'] = 0
-        
-        # Add Impressions column if it doesn't exist (needed for pivot tables)
-        if 'Impressions' not in df.columns:
-            df['Impressions'] = 0
-        
-        # Add date columns
-        df['Month'] = month
-        df['Week'] = week
-        
-        # Convert numeric columns to appropriate types
+        # Add missing numeric columns
         numeric_cols = ['Impressions', 'Clicks', 'Spend', 'QL', 'FT', 'MNR', 'MNR365QL']
         for col in numeric_cols:
-            if col in df.columns:
+            if col not in df.columns:
+                df[col] = 0
+            else:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
         # Convert ratio columns to numeric
@@ -210,29 +264,16 @@ def process_file(file_path, file_name):
                     df[col] = df[col].astype(str).replace('[\$,£,€,¥]', '', regex=True)
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
-        # Add Region and Country columns
-        df['Region'] = 'Unknown'
-        df['Country'] = 'Unknown'
+        # Add date columns
+        df['Month'] = month
+        df['Week'] = week
         
-        # Determine region and country from campaign and adgroup
-        if 'Campaign' in df.columns:
-            for idx, row in df.iterrows():
-                campaign_region, campaign_country = detect_region_and_country(str(row['Campaign']))
-                if campaign_region != "Unknown":
-                    df.at[idx, 'Region'] = campaign_region
-                    df.at[idx, 'Country'] = campaign_country
+        # Apply improved region/country detection
+        df = process_region_country_vectorized(df)
         
-        if 'AdGroup' in df.columns:
-            for idx, row in df.iterrows():
-                # Only update if region is still unknown or if adgroup has more specific info
-                if df.at[idx, 'Region'] == 'Unknown':
-                    adgroup_region, adgroup_country = detect_region_and_country(str(row['AdGroup']))
-                    if adgroup_region != "Unknown":
-                        df.at[idx, 'Region'] = adgroup_region
-                        df.at[idx, 'Country'] = adgroup_country
-        
+        st.write(f"Completed processing {file_name}")
         return df
-    
+        
     except Exception as e:
         st.error(f"Error processing file {file_name}: {str(e)}")
         return None
